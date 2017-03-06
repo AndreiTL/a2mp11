@@ -1,7 +1,10 @@
 import {Injectable} from '@angular/core';
+
+import {Observer} from 'rxjs';
+
 import {StorageService} from './storage.service';
 import {RestService} from './rest.service';
-import {Subject} from 'rxjs'
+import {Subject} from 'rxjs';
 
 @Injectable()
 export class WeatherModelService {
@@ -18,6 +21,10 @@ export class WeatherModelService {
   async: boolean = true;
 
   lastUpdateTime: number;
+
+  restWeatherObserver: () => Observer<Weather.IWeatherObject>;
+
+  private concatFlag: boolean;
 
   private townsWeather: Weather.ITownWeather[];
 
@@ -38,6 +45,29 @@ export class WeatherModelService {
     if (locStorLastUpdateTime) {
       this.subjectUpdateTime.next(locStorLastUpdateTime);
     }
+
+    this.restWeatherObserver = () => {return {
+      next: (value: Weather.IWeatherObject) => {
+        // console.dir(value);
+        if (this.concatFlag) {
+          this.subjectWeather.next(value);
+          this.promiseLoadHandlerResolve(value.list || []);
+        } else {
+          this.subjectWeather.next(value);
+          this.townsWeather = value.list || [];
+          this.subjectTownsWeather.next(this.townsWeather);
+        }
+      },
+      error: err => {
+        this.promiseLoadHandlerReject('');
+        console.log('err weather');
+        console.dir(err);
+      },
+      complete: () => {
+        console.log('comlete thread restWeather');
+      }
+    }};
+
   }
 
   getRxWeatherObject(): Subject<Weather.IWeatherObject> {
@@ -70,26 +100,25 @@ export class WeatherModelService {
     if (indexRemove > -1) {
       this.townsWeather.splice(indexRemove, 1);
     }
-    console.log(indexRemove);
+    // console.log(indexRemove);
     this.subjectTownsWeather.next(this.townsWeather);
   }
 
   // add new town to weather towns list
   addNearestTowns(options: Weather.IWeatherParams) {
-      this.initLoadInCircle(options).then(
-        this.promiseLoadHandlerResolve,
-        this.promiseLoadHandlerReject
-      );
+      this.initLoadInCircle(options);
+      this.concatFlag = true;
   }
 
   // load clean new weather towns list
   loadWeatherInCircle(options: Weather.IWeatherParams): void {
     this.townsWeather = [];
     let lastUpdateTimeString: string = this.storageService.getData('lastUpdateTime');
+    this.concatFlag = false;
     if (!lastUpdateTimeString) {
       // case: first load
       console.log('Nothing in storage. Load from internet.');
-      this.addNearestTowns(options);
+      this.initLoadInCircle(options);
     } else {
       // in milliseconds
       this.lastUpdateTime = parseInt(lastUpdateTimeString, 10);
@@ -102,7 +131,7 @@ export class WeatherModelService {
       } else {
         // case: in storage are expired data then load from internet
         console.log('Expired or invalid in storage. Load from internet.');
-        this.addNearestTowns(options);
+        this.initLoadInCircle(options);
       }
     }
   }
@@ -115,6 +144,7 @@ export class WeatherModelService {
     return parseInt(this.storageService.getData('lastUpdateTime'), 10);
   }
 
+  // todo: refactor it - useless promise
   loadWeatherByIds(ids: number[]): Promise<Weather.IWeatherObject> {
     return new Promise((resolve, reject): void => {
       let weather: Weather.IWeatherObject;
@@ -126,28 +156,17 @@ export class WeatherModelService {
           idsStringBody = value.toString();
         }
       });
-
       let urlTemplate = `http://api.openweathermap.org/data/2.5/group?id=` +
         `${idsStringBody}&appid=${this.API}`;
-
-      this.restService.sendRequest(this.typeRequest, urlTemplate, this.async, '').then(
-        (responseText: string) => {
-          weather = <Weather.IWeatherObject> JSON.parse(responseText);
-          resolve(weather);
-        },
-        () => {
-          console.log('Cann\'t load data from weather portal!');
-          alert('Cann\'t load data from weather portal!');
-          reject();
-        }
-      );
+      this.concatFlag = true;
+      this.restService.sendRequestRx(this.typeRequest, urlTemplate, this.async, '').subscribe(this.restWeatherObserver());
     });
   }
 
   private promiseLoadHandlerResolve = (townList: Weather.ITownWeather[]) => {
     this.storageService.setData('lastUpdateTime', JSON.stringify(this.lastUpdateTime));
-    this.storageService.setData('townsweather', JSON.stringify(this.weatherObject.list));
     this.townsWeather.push(...townList);
+    this.storageService.setData('townsweather', JSON.stringify(this.townsWeather));
     this.subjectTownsWeather.next(this.townsWeather);
   };
   private promiseLoadHandlerReject = (error: string) => {
@@ -155,27 +174,11 @@ export class WeatherModelService {
   };
 
   //subject: Subject<Weather.IWeatherObject>
-  private initLoadInCircle(options: Weather.IWeatherParams): Promise<Weather.ITownWeather[]> {
+  private initLoadInCircle(options: Weather.IWeatherParams): void {
     let weather: Weather.IWeatherObject;
     let urlTemplate = `http://api.openweathermap.org/data/2.5/find?lat=` +
       `${options.latitude}&lon=${options.longitude}&cnt=${options.count}&appid=${this.API}`;
-    return new Promise((resolve, reject) => {
-      this.restService.sendRequest(this.typeRequest, urlTemplate, this.async, '').then(
-        (responseText: string) => {
-          weather = <Weather.IWeatherObject> JSON.parse(responseText);
-          this.lastUpdateTime = Date.now();
-          this.weatherObject = weather;
-          // and when weather.cod===200
-          if (weather && weather.list && weather.list.length > 0) {
-            resolve(weather.list);
-          } else {
-            reject('Cann\'t load data from server');
-          }
-        },
-        () => {
-          reject('Cann\'t load data from server');
-        });
-    })
+    this.restService.sendRequestRx(this.typeRequest, urlTemplate, this.async, '').subscribe(this.restWeatherObserver());
   }
 
   // to deliver changes to other components

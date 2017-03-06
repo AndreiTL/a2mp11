@@ -2,6 +2,8 @@ import { NgModule }      from '@angular/core';
 
 import {SharedModule} from '../sharedModule/shared.module';
 
+import { HttpModule } from '@angular/http';
+
 import {WeatherComponent } from './components/weather/weather.component';
 import {WeatherModelService} from './services/weather_model.service';
 import {WeatherFavoriteModelService} from './services/weather_favorite_model.service';
@@ -17,7 +19,8 @@ import {WindArrowDirective} from './directives/wind-arrow.directive';
 
 @NgModule({
   imports: [
-    SharedModule
+    SharedModule,
+    HttpModule
   ],
   declarations: [
     WeatherComponent,
